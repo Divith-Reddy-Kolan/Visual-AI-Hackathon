@@ -1,0 +1,95 @@
+import cv2
+import mediapipe as mp
+import fiftyone as fo
+import fiftyone.core.dataset as fod
+import os
+import time
+import matplotlib.pyplot as plt
+
+# Initialize MediaPipe Pose
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose()
+mp_draw = mp.solutions.drawing_utils
+
+# Create directory for storing images
+output_dir = "pose_images"
+os.makedirs(output_dir, exist_ok=True)
+
+# Create a FiftyOne dataset
+dataset = fod.Dataset("real_time_pose_estimation")
+image_paths = []
+
+cap = cv2.VideoCapture(0)  # Open webcam
+
+frame_count = 0
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Convert frame to RGB for MediaPipe
+    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = pose.process(img_rgb)
+
+    keypoints = []
+    bbox = None
+
+    if results.pose_landmarks:
+        # Draw pose landmarks
+        mp_draw.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+        # Extract keypoints (x, y, visibility)
+        h, w, _ = frame.shape
+        x_coords = []
+        y_coords = []
+        for landmark in results.pose_landmarks.landmark:
+            x, y = int(landmark.x * w), int(landmark.y * h)
+            x_coords.append(x)
+            y_coords.append(y)
+            keypoints.append({"x": landmark.x, "y": landmark.y, "visibility": landmark.visibility})
+
+        # Calculate bounding box around the pose
+        x_min, x_max = min(x_coords), max(x_coords)
+        y_min, y_max = min(y_coords), max(y_coords)
+        bbox = [x_min, y_min, x_max - x_min, y_max - y_min]
+
+        # Draw bounding box
+        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+
+    # Use Matplotlib to Display Instead of cv2.imshow()
+    plt.figure(figsize=(6, 6))
+    plt.imshow(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    plt.title("Pose Estimation - Close the window to continue")
+    plt.axis("off")
+    plt.show(block=False)
+    plt.pause(0.01)
+    plt.clf()
+
+    # Save every 10th frame
+    if frame_count % 10 == 0:
+        img_path = os.path.join(output_dir, f"frame_{frame_count}.jpg")
+        cv2.imwrite(img_path, frame)
+        image_paths.append(img_path)
+
+        # Add frame to FiftyOne dataset with keypoints & bbox
+        sample = fo.Sample(filepath=img_path)
+        if bbox:
+            sample["bounding_box"] = fo.Detection(label="person", bounding_box=bbox)
+        if keypoints:
+            sample["keypoints"] = fo.Keypoint(label="pose", points=keypoints)
+
+        dataset.add_sample(sample)
+
+    frame_count += 1
+
+    # Exit when 'q' is pressed
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+plt.close()  # Close Matplotlib window
+cv2.destroyAllWindows()
+
+# Launch FiftyOne App
+session = fo.launch_app(dataset)
